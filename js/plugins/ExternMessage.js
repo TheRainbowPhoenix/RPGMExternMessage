@@ -259,7 +259,7 @@ var $externMessage =
 			value = value.replaceAll("\\n", "\n")
 		}
 
-		if (value.includes("\\V")) {
+		if (value && value.includes("\\V")) {
 			value = parseCmd(value, "\\V", args => {
 				args = tryReplace(args);
 				let v = $gameVariables.value(parseInt(args)).toString();
@@ -267,7 +267,7 @@ var $externMessage =
 			});
 		}
 
-		if (value.includes("\\P")) {
+		if (value && value.includes("\\P")) {
 			value = parseCmd(value, "\\P", args => {
 				args = tryReplace(args);
 				let n = parseInt(args) || 0;
