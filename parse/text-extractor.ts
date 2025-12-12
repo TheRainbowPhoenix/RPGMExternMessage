@@ -47,21 +47,24 @@ function extractPageTexts(page: EventPage): string[] {
 }
 
 function registerText(
-  text: string,
+  text: unknown,
   existing: Set<string>,
   globalTextRegistry: Set<string>,
   bucket: string[],
 ) {
-  if (!text.trim()) return;
-  if (existing.has(text) || globalTextRegistry.has(text)) return;
+  if (typeof text !== "string") return;
+  const t = text.trim();
+  if (!t) return;
+  if (existing.has(t) || globalTextRegistry.has(t)) return;
 
-  bucket.push(`"${text}",,,,,`);
-  globalTextRegistry.add(text);
+  bucket.push(`"${t}",,,,,`);
+  globalTextRegistry.add(t);
 }
 
 
 /**
  * Extracts all text messages (command code 101 followed by 401s)
+ * and choice texts (command code 102, parameters[0] = array of choices)
  * from a list of EventCommands.
  */
 function extractListTexts(list: EventCommand[]): string[] {
@@ -70,19 +73,33 @@ function extractListTexts(list: EventCommand[]): string[] {
 
   while (i < list.length) {
     const cmd = list[i];
-    if (cmd.code === 101) { // Text command start
+
+    if (cmd.code === 101) {
+      // Show Text: collect all following 401 lines
       i++;
       while (i < list.length && list[i].code === 401) {
         const text = String(list[i].parameters[0]).trim();
         if (text) texts.push(text);
         i++;
       }
+    } else if (cmd.code === 102) {
+      // Show Choices: first parameter is an array of choice strings
+      const choices = cmd.parameters?.[0];
+      if (Array.isArray(choices)) {
+        for (const choice of choices) {
+          const text = String(choice).trim();
+          if (text) texts.push(text);
+        }
+      }
+      i++;
     } else {
       i++;
     }
   }
+
   return texts;
 }
+
 
 async function processMap(
   mapPath: string,
@@ -365,6 +382,94 @@ async function processEnemies(
   return newEntries;
 }
 
+async function processSystem(
+  systemPath: string,
+  existing: Set<string>,
+  globalTextRegistry: Set<string>
+) {
+  const newEntries: string[] = [];
+
+  try {
+    const json = await Deno.readTextFile(systemPath);
+    const sys = JSON.parse(json);
+
+    // Helper to push a group of texts under one tag
+    function pushGroup(tag: string, texts: unknown[]) {
+      const group: string[] = [];
+      for (const t of texts) {
+        registerText(t, existing, globalTextRegistry, group);
+      }
+      if (group.length > 0) {
+        newEntries.push("", `${tag},,,,,`);
+        newEntries.push(...group);
+      }
+    }
+
+    // --- Simple single-string fields ---
+    if (typeof sys.gameTitle === "string") {
+      pushGroup("SYS:gameTitle", [sys.gameTitle]);
+    }
+    if (typeof sys.currencyUnit === "string") {
+      pushGroup("SYS:currencyUnit", [sys.currencyUnit]);
+    }
+
+    // --- Simple string-array fields (skip first empty element where applicable) ---
+    if (Array.isArray(sys.armorTypes)) {
+      pushGroup("SYS:armorTypes", sys.armorTypes.slice(1)); // index 0 is ""
+    }
+    if (Array.isArray(sys.equipTypes)) {
+      pushGroup("SYS:equipTypes", sys.equipTypes.slice(1));
+    }
+    if (Array.isArray(sys.weaponTypes)) {
+      pushGroup("SYS:weaponTypes", sys.weaponTypes.slice(1));
+    }
+    if (Array.isArray(sys.elements)) {
+      pushGroup("SYS:elements", sys.elements.slice(1));
+    }
+    if (Array.isArray(sys.skillTypes)) {
+      pushGroup("SYS:skillTypes", sys.skillTypes.slice(1));
+    }
+
+    if (Array.isArray(sys.switches)) {
+      pushGroup("SYS:switches", sys.switches.slice(1));
+    }
+    if (Array.isArray(sys.variables)) {
+      pushGroup("SYS:variables", sys.variables.slice(1));
+    }
+
+    // --- terms.basic / commands / params ---
+    const terms = sys.terms ?? {};
+
+    if (Array.isArray(terms.basic)) {
+      pushGroup("SYS:terms.basic", terms.basic);
+    }
+    if (Array.isArray(terms.commands)) {
+      // filter out nulls
+      pushGroup(
+        "SYS:terms.commands",
+        terms.commands.filter((c: unknown) => typeof c === "string"),
+      );
+    }
+    if (Array.isArray(terms.params)) {
+      pushGroup("SYS:terms.params", terms.params);
+    }
+
+    // --- terms.messages.{key} ---
+    if (terms.messages && typeof terms.messages === "object") {
+      const messages = terms.messages as Record<string, unknown>;
+      for (const [key, value] of Object.entries(messages)) {
+        if (typeof value !== "string") continue;
+        pushGroup(`SYS:terms.messages.${key}`, [value]);
+      }
+    }
+  } catch (err) {
+    if (!(err instanceof Deno.errors.NotFound)) {
+      console.error(`Error processing ${systemPath}:`, err);
+    }
+  }
+
+  return newEntries;
+}
 
 
 
@@ -419,6 +524,14 @@ async function main() {
   );
   newEntries.push(...enemyEntries);
 
+  // Process System.json (global settings / terms)
+  const systemEntries = await processSystem(
+    "System.json",
+    EXISTING_TEXTS,
+    GLOBAL_TEXT_REGISTRY
+  );
+  newEntries.push(...systemEntries);
+
   // Process Map*.json events
   for await (const dirEntry of Deno.readDir(".")) {
     if (dirEntry.name.startsWith("Map") && dirEntry.name.endsWith(".json")) {
@@ -438,7 +551,7 @@ async function main() {
 
   let csvHeader = "";
   if (!await Deno.stat(CSV_PATH).catch(() => null)) {
-    csvHeader = ",日本語,English,中文,한국語,,タグ説明\n";
+    csvHeader = "日本語,English,中文,한국語,,タグ説明\n";
   }
 
   await Deno.writeTextFile(
