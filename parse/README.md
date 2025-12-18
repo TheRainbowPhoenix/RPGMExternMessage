@@ -58,3 +58,16 @@ Environment overrides:
 - `DEEPSEEK_API_URL` (default: `https://api.deepseek.com/v1/chat/completions`)
 - `DEEPSEEK_MODEL` (default: `deepseek-chat`)
 - `DEEPSEEK_BATCH_SIZE` (default: 15)
+
+## Qwen translator (no API key)
+
+Use the Qwen3 Coder WebDev Space to fill missing English cells. Supports the
+same CSV formats as above.
+
+```sh
+deno run -A ..\parser\translate-qwen.ts ExternMessage.csv ExternMessage_qwen.csv
+```
+
+Environment overrides:
+
+- `QWEN_BATCH_SIZE` (default: 8)
