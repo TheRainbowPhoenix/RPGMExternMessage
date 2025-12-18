@@ -7,6 +7,7 @@ const BASE_URL = "https://qwen-qwen3-coder-webdev.hf.space";
 const JAPANESE_PATTERN =
   /[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}]/u;
 let qwenPrimed = false;
+const POLL_RETRIES = 5;
 
 type ExternRow = {
   key: string;
@@ -150,61 +151,47 @@ async function runEndpoint(path: string, data: unknown[] = []): Promise<void> {
 }
 
 async function pollJob(path: string, eventId: string): Promise<unknown> {
-  const res = await fetch(
-    `${BASE_URL}/gradio_api/call/${path}/${eventId}`,
-  );
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Qwen poll failed: ${res.status} ${body}`);
-  }
-  const reader = res.body?.getReader();
-  if (!reader) throw new Error("Qwen poll response has no body");
+  for (let attempt = 1; attempt <= POLL_RETRIES; attempt++) {
+    const res = await fetch(
+      `${BASE_URL}/gradio_api/call/${path}/${eventId}`,
+    );
+    const buffer = await res.text();
+    if (!res.ok) {
+      throw new Error(`Qwen poll failed: ${res.status} ${buffer}`);
+    }
 
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let lastParsed: unknown = null;
+    const objects = buffer.match(/\{[\s\S]*?\}/g) ?? [];
+    for (const obj of objects) {
+      let parsed: Record<string, unknown>;
+      try {
+        parsed = JSON.parse(obj);
+      } catch {
+        continue;
+      }
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (value) {
-      buffer += decoder.decode(value, { stream: true });
-      const jsonMatch = buffer.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        let parsed;
-        try {
-          parsed = JSON.parse(jsonMatch[0]);
-        } catch {
-          continue;
-        }
-        lastParsed = parsed;
-        if (
-          parsed?.status === "COMPLETE" || parsed?.status === "FINISHED" ||
-          parsed?.data || parsed?.__type__ || typeof parsed?.open === "boolean"
-        ) {
-          return parsed.data ?? parsed;
-        }
-        if (parsed?.status === "FAILED") {
-          throw new Error(`Qwen job failed: ${buffer}`);
-        }
+      if (
+        parsed.status === "FAILED"
+      ) {
+        throw new Error(`Qwen job failed: ${buffer}`);
+      }
+
+      if (parsed.data) {
+        return parsed.data;
+      }
+
+      if (
+        parsed.status === "COMPLETE" || parsed.status === "FINISHED" ||
+        parsed.__type__ || typeof parsed.open === "boolean"
+      ) {
+        // status-only update; continue polling
       }
     }
-    if (done) break;
-  }
 
-  if (lastParsed !== null) return lastParsed;
-
-  const dataIndex = buffer.indexOf("data:");
-  if (dataIndex >= 0) {
-    const dataStr = buffer.slice(dataIndex + 5).trim();
-    try {
-      return JSON.parse(dataStr);
-    } catch {
-      // fall through
-    }
+    await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
   }
 
   throw new Error(
-    `Qwen poll stream ended without data: ${buffer.slice(0, 200)}`,
+    "Qwen poll stream ended without usable data after retries.",
   );
 }
 
