@@ -6,3 +6,15 @@
 アトラ,Atla
 アマリリス,Amaryllis
 エーテル,Ether
+ギュスターヴ,Gustave
+レグルス,Regulus
+ペスマン,Pesman
+ローズフォード,Roseford
+ボルド,Boldo
+エルマー,Elmer
+オットー,Otto
+ヒルダ,Hilda
+シモン,Simon
+ペーター,Peter
+マックス,Max
+オズリック,Osric
