@@ -3,3 +3,6 @@
 イオ,Io
 祝福瓶,Blessing Flask
 触媒石,Catalyst Stone
+アトラ,Atla
+アマリリス,Amaryllis
+エーテル,Ether
