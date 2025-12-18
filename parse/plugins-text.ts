@@ -57,6 +57,19 @@ async function readExistingTranslations(
   return existing;
 }
 
+function addJapaneseCandidate(value: string, seen: Set<string>) {
+  const chunks = value.split(/\\\\+/);
+
+  for (const chunk of chunks) {
+    let cleaned = chunk
+      .replace(/^[`"'\\/,\s]+|[`"'\\/,\s]+$/g, "")
+      .trim();
+
+    if (!cleaned || !hasJapanese(cleaned)) continue;
+    seen.add(cleaned);
+  }
+}
+
 async function extractJapaneseStrings(
   pluginsPath: string,
   csvPath: string,
@@ -66,22 +79,27 @@ async function extractJapaneseStrings(
   const lines = content.split(/\r?\n/);
 
   for (const line of lines) {
-    if (line.length > 255) {
-      const parts = line.split('"');
-      for (let i = 1; i < parts.length; i += 2) {
-        const decoded = decodeStringLiteral(parts[i]) ?? parts[i];
-        if (!decoded || !hasJapanese(decoded)) continue;
-        seen.add(decoded);
-      }
-      continue;
+    const quoteMatches = line.matchAll(/"((?:\\.|[^"\\])*)"/g);
+    for (const match of quoteMatches) {
+      const decoded = decodeStringLiteral(match[1]) ?? match[1];
+      addJapaneseCandidate(decoded, seen);
     }
 
-    const matches = line.matchAll(/"((?:\\.|[^"\\])*)"/g);
-    for (const match of matches) {
-      const rawContent = match[1];
-      const decoded = decodeStringLiteral(rawContent);
-      if (!decoded || !hasJapanese(decoded)) continue;
-      seen.add(decoded);
+    const backtickMatches = line.matchAll(/`([^`]*)`/g);
+    for (const match of backtickMatches) {
+      addJapaneseCandidate(match[1], seen);
+    }
+
+    const commentIndex = line.indexOf("//");
+    if (commentIndex >= 0) {
+      addJapaneseCandidate(line.slice(commentIndex + 2), seen);
+    }
+
+    if (line.length > 255) {
+      const parts = line.split(/(?:"|`|\/\/|\\\\+)/);
+      for (const part of parts) {
+        addJapaneseCandidate(part, seen);
+      }
     }
   }
 
