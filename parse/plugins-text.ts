@@ -63,13 +63,26 @@ async function extractJapaneseStrings(
 ) {
   const content = await Deno.readTextFile(pluginsPath);
   const seen = new Set<string>();
-  const matches = content.matchAll(/"((?:\\.|[^"\\])*)"/g);
+  const lines = content.split(/\r?\n/);
 
-  for (const match of matches) {
-    const rawContent = match[1];
-    const decoded = decodeStringLiteral(rawContent);
-    if (!decoded || !hasJapanese(decoded)) continue;
-    seen.add(decoded);
+  for (const line of lines) {
+    if (line.length > 255) {
+      const parts = line.split('"');
+      for (let i = 1; i < parts.length; i += 2) {
+        const decoded = decodeStringLiteral(parts[i]) ?? parts[i];
+        if (!decoded || !hasJapanese(decoded)) continue;
+        seen.add(decoded);
+      }
+      continue;
+    }
+
+    const matches = line.matchAll(/"((?:\\.|[^"\\])*)"/g);
+    for (const match of matches) {
+      const rawContent = match[1];
+      const decoded = decodeStringLiteral(rawContent);
+      if (!decoded || !hasJapanese(decoded)) continue;
+      seen.add(decoded);
+    }
   }
 
   if (seen.size === 0) {
