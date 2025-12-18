@@ -6,6 +6,7 @@ const DEFAULT_BATCH_SIZE = 8;
 const BASE_URL = "https://qwen-qwen3-coder-webdev.hf.space";
 const JAPANESE_PATTERN =
   /[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}]/u;
+let qwenPrimed = false;
 
 type ExternRow = {
   key: string;
@@ -141,22 +142,70 @@ async function fetchJob(
   return json;
 }
 
-async function pollJob(path: string, eventId: string): Promise<unknown> {
-  while (true) {
-    const res = await fetch(
-      `${BASE_URL}/gradio_api/call/${path}/${eventId}`,
-    );
-    if (!res.ok) {
-      throw new Error(
-        `Qwen poll failed: ${res.status} ${await res.text()}`,
-      );
-    }
-    const json = await res.json();
-    if (json?.status === "COMPLETE" || json?.data) {
-      return json.data ?? json;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+async function runEndpoint(path: string, data: unknown[] = []): Promise<void> {
+  const result = await fetchJob(path, data);
+  if (typeof result === "string") {
+    await pollJob(path, result);
   }
+}
+
+async function pollJob(path: string, eventId: string): Promise<unknown> {
+  const res = await fetch(
+    `${BASE_URL}/gradio_api/call/${path}/${eventId}`,
+  );
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Qwen poll failed: ${res.status} ${body}`);
+  }
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error("Qwen poll response has no body");
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let lastParsed: unknown = null;
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (value) {
+      buffer += decoder.decode(value, { stream: true });
+      const jsonMatch = buffer.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        let parsed;
+        try {
+          parsed = JSON.parse(jsonMatch[0]);
+        } catch {
+          continue;
+        }
+        lastParsed = parsed;
+        if (
+          parsed?.status === "COMPLETE" || parsed?.status === "FINISHED" ||
+          parsed?.data || parsed?.__type__ || typeof parsed?.open === "boolean"
+        ) {
+          return parsed.data ?? parsed;
+        }
+        if (parsed?.status === "FAILED") {
+          throw new Error(`Qwen job failed: ${buffer}`);
+        }
+      }
+    }
+    if (done) break;
+  }
+
+  if (lastParsed !== null) return lastParsed;
+
+  const dataIndex = buffer.indexOf("data:");
+  if (dataIndex >= 0) {
+    const dataStr = buffer.slice(dataIndex + 5).trim();
+    try {
+      return JSON.parse(dataStr);
+    } catch {
+      // fall through
+    }
+  }
+
+  throw new Error(
+    `Qwen poll stream ended without data: ${buffer.slice(0, 200)}`,
+  );
 }
 
 function extractJsonMap(text: string): Record<string, string> {
@@ -172,6 +221,12 @@ function extractJsonMap(text: string): Record<string, string> {
 async function translateBatch(
   originals: string[],
 ): Promise<Record<string, string>> {
+  if (!qwenPrimed) {
+    await runEndpoint("open_modal_3");
+    await runEndpoint("lambda_4");
+    qwenPrimed = true;
+  }
+
   const payload = buildPrompt(originals);
   const maybeEvent = await fetchJob("generate_code", [payload, ""]);
 
